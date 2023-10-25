@@ -83,17 +83,18 @@ def pca_and_pad(data):
     # Perform PCA
     pca = PCA(n_components=min(50, num_dimensions))
     pca_data = pca.fit_transform(data.T).T
+    reconstructed_data = pca.inverse_transform(pca_data.T).T
     
     # Pad with zeros if necessary
     if pca_data.shape[0] < 50:
         padding = np.zeros((50 - pca_data.shape[0], num_samples))
         pca_data = np.vstack((pca_data, padding))
     
-    reconstructed_data = pca.inverse_transform(pca_data.T).T
+    
     
     return pca_data, reconstructed_data
 
-def plot_traces(data, x_range, input_type):
+def plot_traces(data, x_range, input_type, figsize=(15,15)):
     """
     plot data, either single cell dff traces or pca traces, specified by input type
     
@@ -105,7 +106,7 @@ def plot_traces(data, x_range, input_type):
     Returns:
     - ax handle
     """
-    fig,ax = plt.subplots(figsize=(15,15))
+    fig,ax = plt.subplots(figsize=figsize)
     numCell = data.shape[0]
     #x_range = np.arange(x_range[0],x_range[1])
     for i in range(numCell):
@@ -120,6 +121,34 @@ def plot_traces(data, x_range, input_type):
     plt.tight_layout()
     return ax
 
+def extract_data_by_images(data, image_df):
+    """
+    Extract segments of the data based on a pandas dataframe (natural scene stim df from get_stim_df()).
+    30Hz, each image is presented for 250ms (8 frames), will also take 1s (30 frames) preceding and 0.25s (7 frames)post stim, total 1.5s data
+    make sure that the data and image_df are from the same experiment!!!
+    
+    Parameters:
+    - data: numpy array of shape (ndim, ntimesteps)
+    - image_df: pandas dataframe with columns 'frame', 'start', 'end'
+
+    Returns:
+    - result: list of tuples with labels as first argument and segments of data as second arguent
+    labels are int, data are numpy array
+    """
+    result = []
+
+    for index, row in image_df.iterrows():
+        label = row['frame']
+        start_timestep = row['start']
+        end_timestep = row['end']
+        if start_timestep-30 < 0 or end_timestep+7 > data.shape[1]:
+            continue
+        # Extract segment of data corresponding to the given start and end timesteps
+        segment = data[:, start_timestep-30:end_timestep + 8]
+
+        result.append((label, segment))
+    
+    return result
 
 
 
