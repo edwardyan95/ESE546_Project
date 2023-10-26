@@ -5,6 +5,8 @@ import numpy as np
 import pandas as pd
 from allensdk.core.brain_observatory_cache import BrainObservatoryCache
 from sklearn.decomposition import PCA
+from torch.utils.data import Dataset
+import torch
 
 def get_exps(boc, cre_lines=None, targeted_structures=None, session_types=None):
     """
@@ -68,6 +70,7 @@ def get_stim_df(boc, exp, stimulus_name='natural_scenes'):
     return session_stim
 
 def pca_and_pad(data):
+    
     """
     Perform PCA on data and return the first 50 principal components.
     If the original data has less than 50 dimensions, pad with zeros.
@@ -77,6 +80,7 @@ def pca_and_pad(data):
     
     Returns:
     - pca_data: numpy array of shape (50, num_samples)
+    
     """
     num_dimensions, num_samples = data.shape
     
@@ -91,10 +95,10 @@ def pca_and_pad(data):
         pca_data = np.vstack((pca_data, padding))
     
     
-    
     return pca_data, reconstructed_data
 
 def plot_traces(data, x_range, input_type, figsize=(15,15)):
+
     """
     plot data, either single cell dff traces or pca traces, specified by input type
     
@@ -106,6 +110,7 @@ def plot_traces(data, x_range, input_type, figsize=(15,15)):
     Returns:
     - ax handle
     """
+
     fig,ax = plt.subplots(figsize=figsize)
     numCell = data.shape[0]
     #x_range = np.arange(x_range[0],x_range[1])
@@ -121,7 +126,7 @@ def plot_traces(data, x_range, input_type, figsize=(15,15)):
     plt.tight_layout()
     return ax
 
-def extract_data_by_images(data, image_df, pre=30, post=7):
+def extract_data_by_images(data, stim_df, pre=30, post=7):
     """
     Extract segments of the data based on a pandas dataframe (natural scene stim df from get_stim_df()).
     30Hz, each image is presented for 250ms (8 frames), will also take 1s (30 frames) preceding and 0.25s (7 frames)post stim, total 1.5s data
@@ -129,16 +134,16 @@ def extract_data_by_images(data, image_df, pre=30, post=7):
     
     Parameters:
     - data: numpy array of shape (ndim, ntimesteps)
-    - image_df: pandas dataframe with columns 'frame', 'start', 'end'
+    - stim_df: pandas dataframe with columns 'frame', 'start', 'end'
     - pre: how many frames before image presentation should be extracted
     - post: how many frames after image presentation should be extracted
     Returns:
     - result: list of tuples with labels as first argument and segments of data as second arguent
     labels are int, data are numpy array
     """
-    result = []
+    data_segments, labels = [],[]
 
-    for index, row in image_df.iterrows():
+    for index, row in stim_df.iterrows():
         label = row['frame']
         start_timestep = row['start']
         end_timestep = row['end']
@@ -147,11 +152,28 @@ def extract_data_by_images(data, image_df, pre=30, post=7):
         # Extract segment of data corresponding to the given start and end timesteps
         segment = data[:, start_timestep-pre:end_timestep + post+1]
 
-        result.append((label, segment))
+        data_segments.append(segment)
+        labels.append(label)
     
-    return result
+    return data_segments, labels
+
+def prep_dataset(boc, exps, pre, post):
+    """
+    preparing dataset for training
+
+    """
+    model_input, model_label = [], []
+    
+
+    for exp in exps:
+        dff = get_fluo(boc, exp)
+        pca_dff, _ = pca_and_pad(dff)
+        stim_df = get_stim_df(boc, exp, stimulus_name='natural_scenes')
+        data, labels = extract_data_by_images(pca_dff, stim_df, pre, post)
+        data = [torch.from_numpy(datum).float() for datum in data]
+        labels = torch.from_numpy(labels)
 
 
-
+        
 
 
