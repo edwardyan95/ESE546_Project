@@ -32,7 +32,7 @@ def get_exps(boc, cre_lines=None, targeted_structures=None, session_types=None):
     ec_id = [ecs[i]['id'] for i in range(len(ecs))]
     exps = boc.get_ophys_experiments(experiment_container_ids=ec_id, session_types=session_types)
     for exp in exps:
-        dataset = boc.get_ophys_experiment_data(exp['id'])
+        dataset = boc.get_ophys_experiment_data(exp['id']) # this is downloading the data
     
     return exps
 
@@ -126,7 +126,7 @@ def plot_traces(data, x_range, input_type, figsize=(15,15)):
     plt.tight_layout()
     return ax
 
-def extract_data_by_images(data, stim_df, pre=30, post=7):
+def extract_data_by_images(data, stim_df, pre=15, post=7):
     """
     Extract segments of the data based on a pandas dataframe (natural scene stim df from get_stim_df()).
     30Hz, each image is presented for 250ms (8 frames), will also take 1s (30 frames) preceding and 0.25s (7 frames)post stim, total 1.5s data
@@ -142,7 +142,7 @@ def extract_data_by_images(data, stim_df, pre=30, post=7):
     labels are int, data are numpy array
     """
     data_segments, labels = [],[]
-
+    desig_len = pre+8+post # desired num of timesteps to extract, 8 correspond to 8 frames, 250ms of stim presentation
     for index, row in stim_df.iterrows():
         label = row['frame']
         start_timestep = row['start']
@@ -151,7 +151,9 @@ def extract_data_by_images(data, stim_df, pre=30, post=7):
             continue
         # Extract segment of data corresponding to the given start and end timesteps
         segment = data[:, start_timestep-pre:end_timestep + post+1]
-
+        pad_length = max(0, desig_len - segment.shape[1])
+        segment = np.pad(segment, ((0, 0), (0, pad_length)), 'constant')
+        segment = segment[:,:desig_len]
         data_segments.append(segment)
         labels.append(label)
     
@@ -161,17 +163,56 @@ def prep_dataset(boc, exps, pre, post):
     """
     preparing dataset for training
 
+    Parameters:
+    - boc: BrainObservatoryCache object
+    - exps: list of experiment objects, returned from get_exps()
+    - pre: how many timesteps before image presentation should be extracted
+    - post: how many timesteps after image presentation should be extracted
+    Returns:
+    - out: dict containing 3 keys: model_input, model_labels, metadata, each with the same length containing all datapoints (trials)
+    - metadata contains ['targeted_structures', 'experiment_container_id', 'indicator', 'cre_line', 'session_type', 'specimen_name'], indexed same as input and labels
+    - each model_input is 50 x pre+8+post (PCA components x timesteps) in float32 tensor
+    - each model_label corresponds to the image presented to the mouse at the trial with same index as model_input, in LongTensor
     """
-    model_input, model_label = [], []
-    
+    model_input, model_labels, metadata = [], [], []
+    meta_required = ['targeted_structures', 
+                     'experiment_container_id', 
+                     'indicator', 
+                     'cre_line', 
+                     'session_type', 
+                     'specimen_name']
 
     for exp in exps:
-        dff = get_fluo(boc, exp)
+        meta = boc.get_ophys_experiment_data(exp['id']).get_metadata()
+
+        try:
+            dff = get_fluo(boc, exp)
+        except:
+            print(f"dFF extraction from experiment id{meta['experiment_container_id']} failed!")
+            continue
         pca_dff, _ = pca_and_pad(dff)
-        stim_df = get_stim_df(boc, exp, stimulus_name='natural_scenes')
+        try:
+            stim_df = get_stim_df(boc, exp, stimulus_name='natural_scenes')
+        except:
+            print(f"stim table from experiment id{meta['experiment_container_id']} failed!")
+            continue
         data, labels = extract_data_by_images(pca_dff, stim_df, pre, post)
+        labels  = [118 if x == -1 else x for x in labels ]
         data = [torch.from_numpy(datum).float() for datum in data]
-        labels = torch.from_numpy(labels)
+        labels = torch.LongTensor(labels)
+        model_input.extend(data)
+        model_labels.extend(labels)
+        meta = {k:v for k, v in meta.items() if k in meta_required}
+        meta_list = [meta.copy() for _ in range(len(labels))] # repeat metadata for each datum (natural scene trials) in the exp
+        metadata.extend(meta_list)
+    
+    out = {'model_input':model_input,
+           'model_labels':model_labels,
+           'metadata':metadata}
+    
+    return out
+
+
 
 
         
