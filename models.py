@@ -32,7 +32,8 @@ class LSTMClassifier(nn.Module):
         # Pass through the fully connected layers
         output = self.fc(lstm_out)
         
-        return F.log_softmax(output)
+        # return F.log_softmax(output)
+        return output
     
     # def init_hidden(self, batch_size):
     #     weight = next(self.parameters()).data
