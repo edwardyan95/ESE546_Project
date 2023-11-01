@@ -2,7 +2,7 @@ import numpy as np
 import torch
 import torch.optim as optim
 import torch.nn as nn
-from models import LSTMClassifier
+#from models import RNNClassifier
 import random
 
 def get_train_test_split(dataset, train_prop = 0.7, split_method = 'trial'):
@@ -60,13 +60,14 @@ def get_batch(dataset, start_idx, batch_size = 128, with_replace = False):
     batch_X, batch_Y = batch_X.to(device), batch_Y.to(device)
     return batch_X, batch_Y
 
-def trainLSTM(model, criterion, optimizer, scheduler, epochs, batch_size, clip, train_dataset, test_dataset):
+def trainRNN(model, criterion, optimizer, scheduler, epochs, batch_size, clip, train_dataset, test_dataset, dry_run = False):
     model.train()
     total_batch = len(train_dataset['model_labels'])//batch_size
     batch_train_loss, batch_train_error = [], []
     train_loss, train_error = [], []
     val_loss, val_error = [], []
-    
+    if dry_run:
+        epochs = 1
     for epoch in range(epochs):
         print(f'training epoch#{epoch}')
         for batch, i in enumerate(range(0, total_batch*batch_size, batch_size)):
@@ -83,6 +84,8 @@ def trainLSTM(model, criterion, optimizer, scheduler, epochs, batch_size, clip, 
             nn.utils.clip_grad_norm_(model.parameters(), max_norm=clip)
             optimizer.step() # Updates the weights accordingly
             scheduler.step()
+            if dry_run: # end training with 1 batch
+                break
             if batch%1000 == 0:
                 model.eval()
                 with torch.no_grad():

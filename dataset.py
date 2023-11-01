@@ -159,7 +159,7 @@ def extract_data_by_images(data, stim_df, pre=15, post=7):
     
     return data_segments, labels
 
-def prep_dataset(boc, exps, pre, post):
+def prep_dataset(boc, exps, pre, post, data_type='pca'):
     """
     preparing dataset for training
 
@@ -168,6 +168,7 @@ def prep_dataset(boc, exps, pre, post):
     - exps: list of experiment objects, returned from get_exps()
     - pre: how many timesteps before image presentation should be extracted
     - post: how many timesteps after image presentation should be extracted
+    - data_type: can be 'pca' or 'dff', if pca, forced data output to 50dim x X timesteps, if dff, data dim depend on num of neurons
     Returns:
     - out: dict containing 3 keys: model_input, model_labels, metadata, each with the same length containing all datapoints (trials)
     - metadata contains ['targeted_structures', 'experiment_container_id', 'indicator', 'cre_line', 'session_type', 'specimen_name'], indexed same as input and labels
@@ -196,7 +197,10 @@ def prep_dataset(boc, exps, pre, post):
         except:
             print(f"stim table from experiment id{meta['experiment_container_id']} failed!")
             continue
-        data, labels = extract_data_by_images(pca_dff, stim_df, pre, post)
+        if data_type == 'pca':
+            data, labels = extract_data_by_images(pca_dff, stim_df, pre, post)
+        elif data_type == 'dff':
+            data, labels = extract_data_by_images(dff, stim_df, pre, post)
         labels  = [118 if x == -1 else x for x in labels ]
         data = [torch.from_numpy(datum).float() for datum in data]
         labels = torch.LongTensor(labels)

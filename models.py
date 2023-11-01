@@ -2,19 +2,23 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch
 
-class LSTMClassifier(nn.Module):
-    def __init__(self, input_dim=50, hidden_dim=100, embed_dim=100, num_layers=2, num_classes=119, dropout_prob=0.5):
-        super(LSTMClassifier, self).__init__()
+class RNNClassifier(nn.Module):
+    def __init__(self, input_dim=50, hidden_dim=100, embed_dim=100, num_layers=2, num_classes=119, dropout_prob=0.5, nn_type = 'LSTM'):
+        super(RNNClassifier, self).__init__()
         
         self.hidden_dim = hidden_dim
         self.embed_dim = embed_dim
         self.num_layers = num_layers
         self.num_classes = num_classes
         self.dropout_prob = dropout_prob
-        
+        self.nn_type = nn_type
         self.drop = nn.Dropout(dropout_prob)
         self.embed = nn.Linear(input_dim, embed_dim)
-        self.lstm = nn.LSTM(embed_dim, hidden_dim, num_layers, batch_first=True, dropout=dropout_prob)
+        if nn_type == 'LSTM':
+            self.rnn = nn.LSTM(embed_dim, hidden_dim, num_layers, batch_first=True, dropout=dropout_prob)
+        elif nn_type == 'GRU':
+            self.rnn = nn.GRU(embed_dim, hidden_dim, num_layers, batch_first=True, dropout=dropout_prob)
+        
         self.fc = nn.Linear(hidden_dim, num_classes)
         
         print('Num parameters: ', sum([p.numel() for p in self.parameters()]))
@@ -24,13 +28,13 @@ class LSTMClassifier(nn.Module):
         #print(x.shape)
         # print('emb:', emb)
         # Passing the input through the LSTM layers
-        lstm_out, _ = self.lstm(x)
-        lstm_out = self.drop(lstm_out)
+        rnn_out, _ = self.rnn(x)
+        rnn_out = self.drop(rnn_out)
         # Only take the output from the final timestep
-        lstm_out = lstm_out[:, -1, :]
+        rnn_out = rnn_out[:, -1, :]
         
         # Pass through the fully connected layers
-        output = self.fc(lstm_out)
+        output = self.fc(rnn_out)
         
         # return F.log_softmax(output)
         return output
