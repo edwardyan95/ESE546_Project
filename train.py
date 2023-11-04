@@ -103,6 +103,48 @@ def trainRNN(model, criterion, optimizer, scheduler, epochs, batch_size, clip, t
                 print(f'batch#{batch}, val loss: {loss_val.item(): .2f}, val error: {error_val: .2%}')
     return model, train_loss, train_error, val_error, val_loss
 
+def trainTransformerClassifier(model, criterion, optimizer, scheduler, epochs, batch_size, train_dataset, test_dataset, dry_run = False):
+    model.train()
+    total_batch = len(train_dataset['model_labels'])//batch_size
+    batch_train_loss, batch_train_error = [], []
+    train_loss, train_error = [], []
+    val_loss, val_error = [], []
+    if dry_run:
+        epochs = 1
+    for epoch in range(epochs):
+        print(f'training epoch#{epoch}')
+        for batch, i in enumerate(range(0, total_batch*batch_size, batch_size)):
+            X, y = get_batch(train_dataset, i, batch_size, with_replace=True)
+            optimizer.zero_grad()
+            output= model(X)
+            loss = criterion(output, y)
+            loss.backward() # Does backpropagation and calculates gradients
+            #print(f'output shape: {output.shape}')
+            _, predicted = torch.max(output,1)
+            error = (predicted != y).sum().item()/len(y)
+            batch_train_loss.append(loss.item())
+            batch_train_error.append(error)
+            optimizer.step() # Updates the weights accordingly
+            scheduler.step()
+            if dry_run: # end training with 1 batch
+                break
+            if batch%1000 == 0:
+                model.eval()
+                with torch.no_grad():
+                    x_val,y_val =  get_batch(test_dataset, 0, batch_size, with_replace=True)
+                    output_val = model(x_val)
+                    loss_val = criterion(output_val, y_val)
+                    _, predicted_val = torch.max(output_val,1)
+                    error_val = (predicted_val != y_val).sum().item()/len(y_val)
+                    val_error.append(error_val)
+                    val_loss.append(loss_val)
+                model.train()
+                train_loss.append(np.mean(batch_train_loss[-1000:-1]))
+                train_error.append(np.mean(batch_train_error[-1000:-1]))
+                print(f'batch#{batch}, running train loss: {np.mean(batch_train_loss[-1000:-1]): .2f}, running train error: {np.mean(batch_train_error[-1000:-1]): .2%}')
+                print(f'batch#{batch}, val loss: {loss_val.item(): .2f}, val error: {error_val: .2%}')
+    return model, train_loss, train_error, val_error, val_loss 
+
 
 
 
