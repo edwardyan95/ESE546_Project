@@ -7,6 +7,7 @@ from allensdk.core.brain_observatory_cache import BrainObservatoryCache
 from sklearn.decomposition import PCA
 from torch.utils.data import Dataset
 import torch
+from sklearn.cross_decomposition import CCA
 
 def get_exps(boc, cre_lines=None, targeted_structures=None, session_types=None):
     """
@@ -69,7 +70,7 @@ def get_stim_df(boc, exp, stimulus_name='natural_scenes'):
     session_stim = session_data.get_stimulus_table(stimulus_name)
     return session_stim
 
-def pca_and_pad(data):
+def pca_and_pad(data, num_comp):
     
     """
     Perform PCA on data and return the first 50 principal components.
@@ -85,17 +86,17 @@ def pca_and_pad(data):
     num_dimensions, num_samples = data.shape
     
     # Perform PCA
-    pca = PCA(n_components=min(50, num_dimensions))
+    pca = PCA(n_components=min(num_comp, num_dimensions))
     pca_data = pca.fit_transform(data.T).T
-    reconstructed_data = pca.inverse_transform(pca_data.T).T
+    #reconstructed_data = pca.inverse_transform(pca_data.T).T
     
     # Pad with zeros if necessary
-    if pca_data.shape[0] < 50:
-        padding = np.zeros((50 - pca_data.shape[0], num_samples))
+    if pca_data.shape[0] < num_comp:
+        padding = np.zeros((num_comp - pca_data.shape[0], num_samples))
         pca_data = np.vstack((pca_data, padding))
     
     
-    return pca_data, reconstructed_data
+    return pca_data, np.sum(pca.explained_variance_ratio_)
 
 def plot_traces(data, x_range, input_type, figsize=(15,15)):
 
@@ -139,7 +140,7 @@ def extract_data_by_images(data, stim_df, pre=15, post=7):
     - post: how many frames after image presentation should be extracted
     Returns:
     - result: list of tuples with labels as first argument and segments of data as second arguent
-    labels are int, data are numpy array
+    labels are int, data are numpy array, note that original label -1 is gray screen, convert to 118
     """
     data_segments, labels = [],[]
     desig_len = pre+8+post # desired num of timesteps to extract, 8 correspond to 8 frames, 250ms of stim presentation
@@ -156,10 +157,48 @@ def extract_data_by_images(data, stim_df, pre=15, post=7):
         segment = segment[:,:desig_len]
         data_segments.append(segment)
         labels.append(label)
-    
+    labels  = [118 if x == -1 else x for x in labels ]
     return data_segments, labels
 
-def prep_dataset(boc, exps, pre, post, data_type='pca'):
+def cca_align(ref_data, ref_labels, target_data, target_labels):
+    """
+    align the pca dimensions of reference data and target data using canonical correlation analysis
+
+    Parameters:
+    - ref_data: reference and target data and labels, should be returned from extract_data_from _images()
+
+    Returns:
+    """
+    num_features, num_tmstps = ref_data[0].shape # original number of components, and number of timesteps per trial
+    num_trials = len(target_labels)
+    
+    ref_sort_idx = np.argsort(ref_labels) # sort trials based on image presented (labels) such that the data corresponding to same labels are concatenated together in sequence
+    ref_sort_data = [ref_data[i] for i in ref_sort_idx]
+    ref_sort_labels = [ref_labels[i] for i in ref_sort_idx]
+    ref_concat_data = np.concatenate(ref_sort_data, axis=1)
+
+    target_sort_idx = np.argsort(target_labels)
+    target_sort_data = [target_data[i] for i in target_sort_idx]
+    target_sort_labels = [target_labels[i] for i in target_sort_idx]
+    target_concat_data = np.concatenate(target_sort_data, axis=1)
+
+    cca = CCA(n_components=ref_concat_data.shape[0])
+    cca.fit(ref_concat_data.T, target_concat_data.T)
+    trans_data = target_concat_data.T.dot(cca.y_rotations_).dot(np.linalg.inv(cca.x_rotations_)).T # find transformed data matrix B that is most correlated to ref data matrix A
+    pca_comp_corr = []
+    for i in range(target_concat_data.shape[0]):
+        pca_comp_corr.append(np.corrcoef(ref_concat_data[i,:], trans_data[i,:])[0,1])
+    
+
+    trans_data_list = [trans_data[:,i*num_tmstps:i*num_tmstps+num_tmstps] for i in range(num_trials)]
+    reverse_sort_idx = np.argsort(target_sort_idx) # reverse label and data order to original input
+    trans_data_list = [trans_data_list[i] for i in reverse_sort_idx]
+    reverse_sort_labels = [target_sort_labels[i] for i in reverse_sort_idx]
+
+    return trans_data_list, reverse_sort_labels, np.mean(pca_comp_corr)
+
+
+def prep_dataset(boc, exps, pre, post, data_type='pca', pca_comp = None, cca=False):
     """
     preparing dataset for training
 
@@ -182,7 +221,19 @@ def prep_dataset(boc, exps, pre, post, data_type='pca'):
                      'cre_line', 
                      'session_type', 
                      'specimen_name']
-
+    if cca:
+        numCell = []
+        for exp in exps:
+            data_set = boc.get_ophys_experiment_data(exp['id'])
+            cids = data_set.get_cell_specimen_ids()
+            numCell.append(len(cids))
+        ref_exp = exps[np.argmax(numCell)]
+        dff = get_fluo(boc, exp)
+        pca_dff, ref_explained_var = pca_and_pad(dff, num_comp=pca_comp)
+        print(f'ref data explained variance: {ref_explained_var:.2f}')
+        stim_df = get_stim_df(boc, ref_exp, stimulus_name='natural_scenes')
+        ref_data, ref_labels = extract_data_by_images(pca_dff, stim_df, pre, post)
+    exp_count = 0
     for exp in exps:
         meta = boc.get_ophys_experiment_data(exp['id']).get_metadata()
 
@@ -191,7 +242,7 @@ def prep_dataset(boc, exps, pre, post, data_type='pca'):
         except:
             print(f"dFF extraction from experiment id{meta['experiment_container_id']} failed!")
             continue
-        pca_dff, _ = pca_and_pad(dff)
+        pca_dff, explained_var = pca_and_pad(dff, num_comp=pca_comp)
         try:
             stim_df = get_stim_df(boc, exp, stimulus_name='natural_scenes')
         except:
@@ -199,9 +250,15 @@ def prep_dataset(boc, exps, pre, post, data_type='pca'):
             continue
         if data_type == 'pca':
             data, labels = extract_data_by_images(pca_dff, stim_df, pre, post)
+            print(f'exp#{exp_count} data explained variance: {explained_var:.2f}')
         elif data_type == 'dff':
             data, labels = extract_data_by_images(dff, stim_df, pre, post)
-        labels  = [118 if x == -1 else x for x in labels ]
+        
+        if cca:
+            data, labels, adj_corr = cca_align(ref_data, ref_labels, data, labels)
+            print(f'exp#{exp_count} aligned corr: {adj_corr: .2f}')
+
+        
         data = [torch.from_numpy(datum).float() for datum in data]
         labels = torch.LongTensor(labels)
         model_input.extend(data)
@@ -209,6 +266,7 @@ def prep_dataset(boc, exps, pre, post, data_type='pca'):
         meta = {k:v for k, v in meta.items() if k in meta_required}
         meta_list = [meta.copy() for _ in range(len(labels))] # repeat metadata for each datum (natural scene trials) in the exp
         metadata.extend(meta_list)
+        exp_count+=1
     
     out = {'model_input':model_input,
            'model_labels':model_labels,
