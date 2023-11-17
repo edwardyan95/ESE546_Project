@@ -127,7 +127,7 @@ def plot_traces(data, x_range, input_type, figsize=(15,15)):
     plt.tight_layout()
     return ax
 
-def extract_data_by_images(data, stim_df, pre=15, post=7):
+def extract_data_by_images(data, stim_df, mapping_dict, pre=15, post=7):
     """
     Extract segments of the data based on a pandas dataframe (natural scene stim df from get_stim_df()).
     30Hz, each image is presented for 250ms (8 frames), will also take 1s (30 frames) preceding and 0.25s (7 frames)post stim, total 1.5s data
@@ -136,6 +136,7 @@ def extract_data_by_images(data, stim_df, pre=15, post=7):
     Parameters:
     - data: numpy array of shape (ndim, ntimesteps)
     - stim_df: pandas dataframe with columns 'frame', 'start', 'end'
+    - dictionary for mapping images to different classes
     - pre: how many frames before image presentation should be extracted
     - post: how many frames after image presentation should be extracted
     Returns:
@@ -157,8 +158,9 @@ def extract_data_by_images(data, stim_df, pre=15, post=7):
         segment = segment[:,:desig_len]
         data_segments.append(segment)
         labels.append(label)
-    labels  = [118 if x == -1 else x for x in labels ]
-    return data_segments, labels
+    mapped_labels = [mapping_dict[label] for label in labels]
+    
+    return data_segments, mapped_labels
 
 def cca_align(ref_data, ref_labels, target_data, target_labels):
     """
@@ -198,7 +200,7 @@ def cca_align(ref_data, ref_labels, target_data, target_labels):
     return trans_data_list, reverse_sort_labels, np.mean(pca_comp_corr)
 
 
-def prep_dataset(boc, exps, pre, post, data_type='pca', pca_comp = None, cca=False):
+def prep_dataset(boc, exps, mapping_dict, pre=15, post=8, data_type='pca', pca_comp = None, cca=False):
     """
     preparing dataset for training
 
@@ -232,7 +234,7 @@ def prep_dataset(boc, exps, pre, post, data_type='pca', pca_comp = None, cca=Fal
         pca_dff, ref_explained_var = pca_and_pad(dff, num_comp=pca_comp)
         print(f'ref data explained variance: {ref_explained_var:.2f}')
         stim_df = get_stim_df(boc, ref_exp, stimulus_name='natural_scenes')
-        ref_data, ref_labels = extract_data_by_images(pca_dff, stim_df, pre, post)
+        ref_data, ref_labels = extract_data_by_images(pca_dff, stim_df, mapping_dict, pre, post)
     exp_count = 0
     for exp in exps:
         meta = boc.get_ophys_experiment_data(exp['id']).get_metadata()
@@ -249,10 +251,10 @@ def prep_dataset(boc, exps, pre, post, data_type='pca', pca_comp = None, cca=Fal
             print(f"stim table from experiment id{meta['experiment_container_id']} failed!")
             continue
         if data_type == 'pca':
-            data, labels = extract_data_by_images(pca_dff, stim_df, pre, post)
+            data, labels = extract_data_by_images(pca_dff, stim_df, mapping_dict, pre, post)
             print(f'exp#{exp_count} data explained variance: {explained_var:.2f}')
         elif data_type == 'dff':
-            data, labels = extract_data_by_images(dff, stim_df, pre, post)
+            data, labels = extract_data_by_images(dff, stim_df, mapping_dict, pre, post)
         
         if cca:
             data, labels, adj_corr = cca_align(ref_data, ref_labels, data, labels)
@@ -273,6 +275,21 @@ def prep_dataset(boc, exps, pre, post, data_type='pca', pca_comp = None, cca=Fal
            'metadata':metadata}
     
     return out
+
+def get_mapping_dict(seq):
+    """
+    to generate the dictionary where the keys corresponds to indexes of the 118 images, and the values correspond to the manually defined classes
+
+    parameters:
+    seq: list of manually defined classes for each of the 118 images. attach -1:max(seq) for gray screen
+
+    returns:
+    mapping_dict: mapping dictionary described above,
+    num_classes: total number of manually defined classes
+    """
+    dict1 = {i-1: val for i, val in enumerate(seq, start=1)}
+    dict1.update({-1:max(seq)+1})
+    return dict1, len(set(dict1.values()))
 
 
 
