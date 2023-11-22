@@ -25,8 +25,8 @@ class RNNClassifier(nn.Module):
         print('Num parameters: ', sum([p.numel() for p in self.parameters()]))
         
     def forward(self, x):
-        x = self.drop(self.embed(x))
         #print('x shape:', x.shape)
+        x = self.drop(self.embed(x))
         # Passing the input through the LSTM layers
         rnn_out, _ = self.rnn(x)
         #print('out shape:', rnn_out.shape)
@@ -112,7 +112,7 @@ class PositionalEncoding(nn.Module):
         return torch.transpose(x, 0, 1)
 
 class TransformerClassifier(nn.Transformer):
-    """Container module with an encoder, a recurrent or transformer module, and a decoder."""
+    """Container module with an encoder, a transformer module, and a decoder."""
 
     def __init__(self, input_dim, hidden_dim, nlayers, nhead, num_classes, dropout=0.5):
         super(TransformerClassifier, self).__init__(d_model=hidden_dim, nhead=nhead, dim_feedforward=hidden_dim, num_encoder_layers=nlayers, batch_first=True)
@@ -158,3 +158,69 @@ class TransformerClassifier(nn.Transformer):
         output = self.decoder(output)
         #print('decoder output: ', output.shape)
         return output
+    
+
+
+class DeepSetRNNClassifier(nn.Module):
+    def __init__(self, num_timesteps, hidden_dim, rnn_hidden_dim, num_classes, 
+                 num_linear_layers=3, num_rnn_layers=1, rnn_type='LSTM', dropout_prob=0.5):
+        super(DeepSetRNNClassifier, self).__init__()
+        
+        # Transformation layers
+        layers = [nn.Linear(num_timesteps, hidden_dim), 
+                  nn.BatchNorm1d(hidden_dim), 
+                  nn.ReLU(), nn.Dropout(dropout_prob)]
+        for _ in range(num_linear_layers - 1):
+            layers.extend([
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.BatchNorm1d(hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout_prob)
+            ])
+        self.transform = nn.Sequential(*layers)
+
+        # RNN layer
+        if rnn_type == 'LSTM':
+            self.rnn = nn.LSTM(1, rnn_hidden_dim, num_layers=num_rnn_layers, batch_first=True, dropout=dropout_prob if num_rnn_layers > 1 else 0)
+        else:
+            self.rnn = nn.GRU(1, rnn_hidden_dim, num_layers=num_rnn_layers, batch_first=True, dropout=dropout_prob if num_rnn_layers > 1 else 0)
+
+        # Classifier layer
+        self.classifier = nn.Sequential(
+            nn.Dropout(dropout_prob),
+            nn.Linear(rnn_hidden_dim, num_classes)
+        )
+        print('Num parameters: ', sum([p.numel() for p in self.parameters()]))
+    def forward(self, x, neuron_counts):
+        # Transform
+        batch_size, num_timesteps, num_neurons = x.size()
+        # x = x.view(-1, num_features)  # Reshape to (batch_size * num_timesteps, num_features)
+
+        # x = self.transform(x)
+
+        # x = x.view(batch_size, num_timesteps, -1)  # Reshape back to (batch_size, num_timesteps, hidden_dim)
+
+        # Assuming x is your input tensor with shape (batch, timesteps, neurons)
+        x_permuted = x.permute(0, 2, 1)  # Permute to (batch, neurons, timesteps)
+        reshaped_x = x_permuted.reshape(-1, num_timesteps)  # Reshape to (batch * neurons, timesteps)
+        x_transform = self.transform(reshaped_x)
+        print('x transform shape:', x_transform.shape)
+        # Reshape to (batch, neurons, timesteps)
+        x_reshaped = x_transform.reshape(batch_size, num_neurons, -1)
+
+        # Permute to (batch, timesteps, neurons)
+        x = x_reshaped.permute(0, 2, 1)
+        
+        print('x before aggre shape:', x.shape)
+        # Normalized aggregation
+        x = torch.sum(x, dim=2) / neuron_counts.unsqueeze(1)
+        
+        x = x.unsqueeze(-1) # batch_size, num_timesteps -> batch_size, num_timesteps, num_feat=1
+        # RNN
+        rnn_out, _ = self.rnn(x)
+
+        # Classifier
+        output = self.classifier(rnn_out[:, -1, :])  # Only use the output from the final timestep
+        
+        return output
+

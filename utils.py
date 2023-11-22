@@ -34,3 +34,37 @@ def set_seed(seed: int = 42) -> None:
     torch.manual_seed(seed)
     torch.cuda.manual_seed(seed)
     random.seed(seed)
+
+def filter_exps(boc, exps, num_exps = 10, min_neuron = 0, max_neuron = 1000, behavior = False):
+    
+    pp_count = 0
+    pp_exp_idx = []
+    cell_count_idx = []
+    for i in range(len(exps)):
+        exp = exps[i]
+        data_set = boc.get_ophys_experiment_data(exp['id'])
+        cids = data_set.get_cell_specimen_ids()
+        if len(cids)>=min_neuron and len(cids)<=max_neuron:
+            cell_count_idx.append(i)
+        try:
+            _, _ = boc.get_ophys_experiment_data(exp['id']).get_pupil_size()
+            pp_count+=1
+            pp_exp_idx.append(i)
+        except:
+            continue
+    # Convert lists to sets and perform union
+    if behavior:
+        union_list = cell_count_idx and pp_exp_idx
+    else:
+        union_list = cell_count_idx
+    
+    if len(union_list)>=num_exps:
+        sampled_exp_idx = random.sample(union_list, num_exps)
+    else:
+        sampled_exp_idx = union_list
+    return [exps[i] for i in sampled_exp_idx]
+    
+
+    
+    
+        

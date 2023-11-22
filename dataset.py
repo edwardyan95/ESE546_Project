@@ -8,6 +8,7 @@ from sklearn.decomposition import PCA
 from torch.utils.data import Dataset
 import torch
 from sklearn.cross_decomposition import CCA
+from scipy import stats
 
 def get_exps(boc, cre_lines=None, targeted_structures=None, session_types=None):
     """
@@ -159,7 +160,7 @@ def extract_data_by_images(data, stim_df, mapping_dict, pre=15, post=7):
         data_segments.append(segment)
         labels.append(label)
     mapped_labels = [mapping_dict[label] for label in labels]
-    
+
     return data_segments, mapped_labels
 
 def cca_align(ref_data, ref_labels, target_data, target_labels):
@@ -200,16 +201,20 @@ def cca_align(ref_data, ref_labels, target_data, target_labels):
     return trans_data_list, reverse_sort_labels, np.mean(pca_comp_corr)
 
 
-def prep_dataset(boc, exps, mapping_dict, pre=15, post=8, data_type='pca', pca_comp = None, cca=False):
+def prep_dataset(boc, exps, mapping_dict, pre=15, post=8, data_type='pca', pca_comp = None, cca=False, behavior = False):
     """
     preparing dataset for training
 
     Parameters:
     - boc: BrainObservatoryCache object
     - exps: list of experiment objects, returned from get_exps()
+    - mapping_dict: dictionary for mapping natural scene images to manually defined classes
     - pre: how many timesteps before image presentation should be extracted
     - post: how many timesteps after image presentation should be extracted
     - data_type: can be 'pca' or 'dff', if pca, forced data output to 50dim x X timesteps, if dff, data dim depend on num of neurons
+    - pca_comp: number of pca components if data_type == 'pca'
+    - cca: whether to perform cca, if data_type == 'pca'
+    - behavior: whether to extract behavior traces, pupil size and running speed, fails if they cannot be extracted
     Returns:
     - out: dict containing 3 keys: model_input, model_labels, metadata, each with the same length containing all datapoints (trials)
     - metadata contains ['targeted_structures', 'experiment_container_id', 'indicator', 'cre_line', 'session_type', 'specimen_name'], indexed same as input and labels
@@ -217,6 +222,8 @@ def prep_dataset(boc, exps, mapping_dict, pre=15, post=8, data_type='pca', pca_c
     - each model_label corresponds to the image presented to the mouse at the trial with same index as model_input, in LongTensor
     """
     model_input, model_labels, metadata = [], [], []
+    if behavior:
+        running_speed_out, pupil_size_out = [], []
     meta_required = ['targeted_structures', 
                      'experiment_container_id', 
                      'indicator', 
@@ -231,6 +238,7 @@ def prep_dataset(boc, exps, mapping_dict, pre=15, post=8, data_type='pca', pca_c
             numCell.append(len(cids))
         ref_exp = exps[np.argmax(numCell)]
         dff = get_fluo(boc, exp)
+        dff = stats.zscore(dff, axis=1)
         pca_dff, ref_explained_var = pca_and_pad(dff, num_comp=pca_comp)
         print(f'ref data explained variance: {ref_explained_var:.2f}')
         stim_df = get_stim_df(boc, ref_exp, stimulus_name='natural_scenes')
@@ -241,6 +249,7 @@ def prep_dataset(boc, exps, mapping_dict, pre=15, post=8, data_type='pca', pca_c
 
         try:
             dff = get_fluo(boc, exp)
+            dff = stats.zscore(dff, axis=1)
         except:
             print(f"dFF extraction from experiment id{meta['experiment_container_id']} failed!")
             continue
@@ -260,7 +269,6 @@ def prep_dataset(boc, exps, mapping_dict, pre=15, post=8, data_type='pca', pca_c
             data, labels, adj_corr = cca_align(ref_data, ref_labels, data, labels)
             print(f'exp#{exp_count} aligned corr: {adj_corr: .2f}')
 
-        
         data = [torch.from_numpy(datum).float() for datum in data]
         labels = torch.LongTensor(labels)
         model_input.extend(data)
@@ -268,11 +276,30 @@ def prep_dataset(boc, exps, mapping_dict, pre=15, post=8, data_type='pca', pca_c
         meta = {k:v for k, v in meta.items() if k in meta_required}
         meta_list = [meta.copy() for _ in range(len(labels))] # repeat metadata for each datum (natural scene trials) in the exp
         metadata.extend(meta_list)
+        if behavior:
+            run, _ = boc.get_ophys_experiment_data(exp['id']).get_running_speed()
+            run[np.isnan(run)]=0
+            run = stats.zscore(run)
+            run = run.reshape(1,-1) # 1 x timepoints
+            run_data, _ = extract_data_by_images(run, stim_df, mapping_dict, pre, post)
+            _, pupil_size = boc.get_ophys_experiment_data(exp['id']).get_pupil_size()
+            pupil_size[np.isnan(pupil_size)]=0
+            pupil_size = stats.zscore(pupil_size)
+            pupil_size = pupil_size.reshape(1,-1)
+            pupil_size_data, _ = extract_data_by_images(pupil_size, stim_df, mapping_dict, pre, post)
+            run_data = [torch.from_numpy(datum).float() for datum in run_data]
+            pupil_size_data = [torch.from_numpy(datum).float() for datum in pupil_size_data]
+            running_speed_out.extend(run_data)
+            pupil_size_out.extend(pupil_size_data)
+        
         exp_count+=1
     
     out = {'model_input':model_input,
            'model_labels':model_labels,
            'metadata':metadata}
+    if behavior:
+        out.update({'running_speed':running_speed_out,
+                    'pupil_size':pupil_size_out})
     
     return out
 
