@@ -25,8 +25,8 @@ class RNNClassifier(nn.Module):
         print('Num parameters: ', sum([p.numel() for p in self.parameters()]))
         
     def forward(self, x):
-        #print('x shape:', x.shape)
         x = self.drop(self.embed(x))
+        #print('x shape:', x.shape)
         # Passing the input through the LSTM layers
         rnn_out, _ = self.rnn(x)
         #print('out shape:', rnn_out.shape)
@@ -112,7 +112,7 @@ class PositionalEncoding(nn.Module):
         return torch.transpose(x, 0, 1)
 
 class TransformerClassifier(nn.Transformer):
-    """Container module with an encoder, a transformer module, and a decoder."""
+    """Container module with an encoder, a recurrent or transformer module, and a decoder."""
 
     def __init__(self, input_dim, hidden_dim, nlayers, nhead, num_classes, dropout=0.5):
         super(TransformerClassifier, self).__init__(d_model=hidden_dim, nhead=nhead, dim_feedforward=hidden_dim, num_encoder_layers=nlayers, batch_first=True)
@@ -159,8 +159,6 @@ class TransformerClassifier(nn.Transformer):
         #print('decoder output: ', output.shape)
         return output
     
-
-
 class DeepSetRNNClassifier(nn.Module):
     def __init__(self, num_timesteps, hidden_dim, rnn_hidden_dim, num_classes, 
                  num_linear_layers=3, num_rnn_layers=1, rnn_type='LSTM', dropout_prob=0.5):
@@ -223,4 +221,3 @@ class DeepSetRNNClassifier(nn.Module):
         output = self.classifier(rnn_out[:, -1, :])  # Only use the output from the final timestep
         
         return output
-

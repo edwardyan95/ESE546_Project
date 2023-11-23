@@ -63,8 +63,3 @@ def filter_exps(boc, exps, num_exps = 10, min_neuron = 0, max_neuron = 1000, beh
     else:
         sampled_exp_idx = union_list
     return [exps[i] for i in sampled_exp_idx]
-    
-
-    
-    
-        

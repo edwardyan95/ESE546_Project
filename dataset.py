@@ -128,7 +128,7 @@ def plot_traces(data, x_range, input_type, figsize=(15,15)):
     plt.tight_layout()
     return ax
 
-def extract_data_by_images(data, stim_df, mapping_dict, pre=15, post=7):
+def extract_data_by_images(data, stim_df, mapping_dict=None, pre=15, post=7):
     """
     Extract segments of the data based on a pandas dataframe (natural scene stim df from get_stim_df()).
     30Hz, each image is presented for 250ms (8 frames), will also take 1s (30 frames) preceding and 0.25s (7 frames)post stim, total 1.5s data
@@ -159,8 +159,11 @@ def extract_data_by_images(data, stim_df, mapping_dict, pre=15, post=7):
         segment = segment[:,:desig_len]
         data_segments.append(segment)
         labels.append(label)
-    mapped_labels = [mapping_dict[label] for label in labels]
-
+    if mapping_dict is not None:
+        mapped_labels = [mapping_dict[label] for label in labels]
+    else:
+        mapped_labels = [118 if label == -1 else label for label in labels]
+    
     return data_segments, mapped_labels
 
 def cca_align(ref_data, ref_labels, target_data, target_labels):
@@ -200,21 +203,16 @@ def cca_align(ref_data, ref_labels, target_data, target_labels):
 
     return trans_data_list, reverse_sort_labels, np.mean(pca_comp_corr)
 
-
-def prep_dataset(boc, exps, mapping_dict, pre=15, post=8, data_type='pca', pca_comp = None, cca=False, behavior = False):
+def prep_dataset(boc, exps, mapping_dict=None, pre=15, post=7, data_type='pca', pca_comp = None, cca=False, behavior=False):
     """
     preparing dataset for training
 
     Parameters:
     - boc: BrainObservatoryCache object
     - exps: list of experiment objects, returned from get_exps()
-    - mapping_dict: dictionary for mapping natural scene images to manually defined classes
     - pre: how many timesteps before image presentation should be extracted
     - post: how many timesteps after image presentation should be extracted
     - data_type: can be 'pca' or 'dff', if pca, forced data output to 50dim x X timesteps, if dff, data dim depend on num of neurons
-    - pca_comp: number of pca components if data_type == 'pca'
-    - cca: whether to perform cca, if data_type == 'pca'
-    - behavior: whether to extract behavior traces, pupil size and running speed, fails if they cannot be extracted
     Returns:
     - out: dict containing 3 keys: model_input, model_labels, metadata, each with the same length containing all datapoints (trials)
     - metadata contains ['targeted_structures', 'experiment_container_id', 'indicator', 'cre_line', 'session_type', 'specimen_name'], indexed same as input and labels
@@ -238,11 +236,10 @@ def prep_dataset(boc, exps, mapping_dict, pre=15, post=8, data_type='pca', pca_c
             numCell.append(len(cids))
         ref_exp = exps[np.argmax(numCell)]
         dff = get_fluo(boc, exp)
-        dff = stats.zscore(dff, axis=1)
         pca_dff, ref_explained_var = pca_and_pad(dff, num_comp=pca_comp)
         print(f'ref data explained variance: {ref_explained_var:.2f}')
         stim_df = get_stim_df(boc, ref_exp, stimulus_name='natural_scenes')
-        ref_data, ref_labels = extract_data_by_images(pca_dff, stim_df, mapping_dict, pre, post)
+        ref_data, ref_labels = extract_data_by_images(pca_dff, stim_df, mapping_dict=mapping_dict, pre=pre, post=post)
     exp_count = 0
     for exp in exps:
         meta = boc.get_ophys_experiment_data(exp['id']).get_metadata()
@@ -260,15 +257,16 @@ def prep_dataset(boc, exps, mapping_dict, pre=15, post=8, data_type='pca', pca_c
             print(f"stim table from experiment id{meta['experiment_container_id']} failed!")
             continue
         if data_type == 'pca':
-            data, labels = extract_data_by_images(pca_dff, stim_df, mapping_dict, pre, post)
+            data, labels = extract_data_by_images(pca_dff, stim_df, mapping_dict=mapping_dict, pre=pre, post=post)
             print(f'exp#{exp_count} data explained variance: {explained_var:.2f}')
         elif data_type == 'dff':
-            data, labels = extract_data_by_images(dff, stim_df, mapping_dict, pre, post)
+            data, labels = extract_data_by_images(dff, stim_df, mapping_dict=mapping_dict, pre=pre, post=post)
         
         if cca:
             data, labels, adj_corr = cca_align(ref_data, ref_labels, data, labels)
             print(f'exp#{exp_count} aligned corr: {adj_corr: .2f}')
 
+        
         data = [torch.from_numpy(datum).float() for datum in data]
         labels = torch.LongTensor(labels)
         model_input.extend(data)
@@ -291,7 +289,7 @@ def prep_dataset(boc, exps, mapping_dict, pre=15, post=8, data_type='pca', pca_c
             pupil_size_data = [torch.from_numpy(datum).float() for datum in pupil_size_data]
             running_speed_out.extend(run_data)
             pupil_size_out.extend(pupil_size_data)
-        
+            
         exp_count+=1
     
     out = {'model_input':model_input,
@@ -302,7 +300,7 @@ def prep_dataset(boc, exps, mapping_dict, pre=15, post=8, data_type='pca', pca_c
                     'pupil_size':pupil_size_out})
     
     return out
-
+    
 def get_mapping_dict(seq):
     """
     to generate the dictionary where the keys corresponds to indexes of the 118 images, and the values correspond to the manually defined classes
@@ -322,5 +320,3 @@ def get_mapping_dict(seq):
 
 
         
-
-
