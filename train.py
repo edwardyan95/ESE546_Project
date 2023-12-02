@@ -211,13 +211,14 @@ def trainRNN(model, criterion, optimizer, scheduler, epochs, batch_size, clip, t
             epoch_val_error = np.mean(batch_val_error)
             epoch_val_top5_error = np.mean(batch_val_top5_error)
             val_loss.append(epoch_val_loss)
+            print(type(epoch_val_loss))
             val_error.append(epoch_val_error)
             val_top5_error.append(epoch_val_top5_error)
 
         # Print epoch statistics
         print(f'Epoch {epoch+1}/{epochs}')
-        print(f'Training loss: {epoch_train_loss:.4f}, Training error: {epoch_train_error:.4f}, Training Top5 error: {epoch_train_top5_error:.4f}')
-        print(f'Validation loss: {epoch_val_loss:.4f}, Validation error: {epoch_val_error:.4f}, Validation Top5 error: {epoch_val_top5_error:.4f}')
+        print(f'Training loss: {epoch_train_loss:.2f}, Training error: {epoch_train_error:.2%}, Training Top5 error: {epoch_train_top5_error:.2%}')
+        print(f'Validation loss: {epoch_val_loss:.2f}, Validation error: {epoch_val_error:.2%}, Validation Top5 error: {epoch_val_top5_error:.2%}')
         
         model.train()  # Set the model back to training mode
         
@@ -296,8 +297,8 @@ def trainTransformerClassifier(model, criterion, optimizer, scheduler, epochs, b
 
         # Print epoch statistics
         print(f'Epoch {epoch+1}/{epochs}')
-        print(f'Training loss: {epoch_train_loss:.4f}, Training error: {epoch_train_error:.4f}, Training Top5 error: {epoch_train_top5_error:.4f}')
-        print(f'Validation loss: {epoch_val_loss:.4f}, Validation error: {epoch_val_error:.4f}, Validation Top5 error: {epoch_val_top5_error:.4f}')
+        print(f'Training loss: {epoch_train_loss:.2f}, Training error: {epoch_train_error:.2%}, Training Top5 error: {epoch_train_top5_error:.2%}')
+        print(f'Validation loss: {epoch_val_loss:.2f}, Validation error: {epoch_val_error:.2%}, Validation Top5 error: {epoch_val_top5_error:.2%}')
         
         model.train()  # Set the model back to training mode
         
@@ -318,6 +319,7 @@ def trainDeepSetRNNClassifier(model, criterion, optimizer, scheduler, epochs, ba
         batch_train_loss, batch_train_error = [], []
         
         for batch, i in enumerate(range(0, total_batch*batch_size, batch_size)):
+            
             X, y, train_batch_idx = get_batch(train_dataset, i, batch_size, with_replace=True)
             optimizer.zero_grad()
             train_feat_counts = train_orig_num_feat[train_batch_idx]

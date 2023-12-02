@@ -95,6 +95,7 @@ class PositionalEncoding(nn.Module):
         pe[:, 1::2] = torch.cos(position * div_term)
         pe = pe.unsqueeze(0).transpose(0, 1)
         self.register_buffer('pe', pe)
+        
 
     def forward(self, x):
         r"""Inputs of forward function
@@ -127,6 +128,7 @@ class TransformerClassifier(nn.Transformer):
         self.class_token = nn.Parameter(torch.rand(1, self.hidden_dim))
 
         self.init_weights()
+        print('Num parameters: ', sum([p.numel() for p in self.parameters()]))
 
     def _generate_square_subsequent_mask(self, sz):
         mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
@@ -160,18 +162,18 @@ class TransformerClassifier(nn.Transformer):
         return output
     
 class DeepSetRNNClassifier(nn.Module):
-    def __init__(self, num_timesteps, hidden_dim, rnn_hidden_dim, num_classes, 
+    def __init__(self, input_dim, hidden_dim, rnn_hidden_dim, num_classes, 
                  num_linear_layers=3, num_rnn_layers=1, rnn_type='LSTM', dropout_prob=0.5):
         super(DeepSetRNNClassifier, self).__init__()
         
         # Transformation layers
-        layers = [nn.Linear(num_timesteps, hidden_dim), 
-                  nn.BatchNorm1d(hidden_dim), 
+        layers = [nn.Linear(1, hidden_dim), 
+                  #nn.BatchNorm1d(hidden_dim), 
                   nn.ReLU(), nn.Dropout(dropout_prob)]
         for _ in range(num_linear_layers - 1):
             layers.extend([
                 nn.Linear(hidden_dim, hidden_dim),
-                nn.BatchNorm1d(hidden_dim),
+                #nn.BatchNorm1d(hidden_dim),
                 nn.ReLU(),
                 nn.Dropout(dropout_prob)
             ])
@@ -179,9 +181,9 @@ class DeepSetRNNClassifier(nn.Module):
 
         # RNN layer
         if rnn_type == 'LSTM':
-            self.rnn = nn.LSTM(1, rnn_hidden_dim, num_layers=num_rnn_layers, batch_first=True, dropout=dropout_prob if num_rnn_layers > 1 else 0)
+            self.rnn = nn.LSTM(hidden_dim, rnn_hidden_dim, num_layers=num_rnn_layers, batch_first=True, dropout=dropout_prob if num_rnn_layers > 1 else 0)
         else:
-            self.rnn = nn.GRU(1, rnn_hidden_dim, num_layers=num_rnn_layers, batch_first=True, dropout=dropout_prob if num_rnn_layers > 1 else 0)
+            self.rnn = nn.GRU(hidden_dim, rnn_hidden_dim, num_layers=num_rnn_layers, batch_first=True, dropout=dropout_prob if num_rnn_layers > 1 else 0)
 
         # Classifier layer
         self.classifier = nn.Sequential(
@@ -201,19 +203,22 @@ class DeepSetRNNClassifier(nn.Module):
         # Assuming x is your input tensor with shape (batch, timesteps, neurons)
         x_permuted = x.permute(0, 2, 1)  # Permute to (batch, neurons, timesteps)
         reshaped_x = x_permuted.reshape(-1, num_timesteps)  # Reshape to (batch * neurons, timesteps)
+        reshaped_x = reshaped_x.unsqueeze(2) # Reshape to (batch * neurons, timesteps, 1)
+        #print('reshaped_x shape:', reshaped_x.shape)
         x_transform = self.transform(reshaped_x)
-        print('x transform shape:', x_transform.shape)
-        # Reshape to (batch, neurons, timesteps)
-        x_reshaped = x_transform.reshape(batch_size, num_neurons, -1)
+        #print('x transform shape:', x_transform.shape)
+        # Reshape to (batch, neurons, timesteps, hidden_dim)
+        x_reshaped = x_transform.reshape(batch_size, num_neurons, num_timesteps, -1)
 
-        # Permute to (batch, timesteps, neurons)
-        x = x_reshaped.permute(0, 2, 1)
+        # Permute to (batch, timesteps, neurons, hidden_dim)
+        x = x_reshaped.permute(0, 2, 1, 3)
         
-        print('x before aggre shape:', x.shape)
+        #print('x before aggre shape:', x.shape)
         # Normalized aggregation
-        x = torch.sum(x, dim=2) / neuron_counts.unsqueeze(1)
-        
-        x = x.unsqueeze(-1) # batch_size, num_timesteps -> batch_size, num_timesteps, num_feat=1
+        x = torch.sum(x, dim=2).squeeze()
+        #print('x after aggre shape:', x.shape)
+        x = x / neuron_counts.view(-1, 1, 1)
+        #print('x before rnn:', x.shape)
         # RNN
         rnn_out, _ = self.rnn(x)
 

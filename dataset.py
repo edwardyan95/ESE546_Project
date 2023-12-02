@@ -9,6 +9,9 @@ from torch.utils.data import Dataset
 import torch
 from sklearn.cross_decomposition import CCA
 from scipy import stats
+import itertools
+from allensdk.brain_observatory.static_gratings import StaticGratings
+import random
 
 def get_exps(boc, cre_lines=None, targeted_structures=None, session_types=None):
     """
@@ -148,8 +151,8 @@ def extract_data_by_images(data, stim_df, mapping_dict=None, pre=15, post=7):
     desig_len = pre+8+post # desired num of timesteps to extract, 8 correspond to 8 frames, 250ms of stim presentation
     for index, row in stim_df.iterrows():
         label = row['frame']
-        start_timestep = row['start']
-        end_timestep = row['end']
+        start_timestep = row['start']-8
+        end_timestep = row['end']-8
         if start_timestep-pre < 0 or end_timestep+post > data.shape[1]:
             continue
         # Extract segment of data corresponding to the given start and end timesteps
@@ -188,12 +191,36 @@ def cca_align(ref_data, ref_labels, target_data, target_labels):
     target_sort_labels = [target_labels[i] for i in target_sort_idx]
     target_concat_data = np.concatenate(target_sort_data, axis=1)
 
+    arrays_per_label = 50
+
+    # Initialize the two lists
+    list1 = []
+    list2 = []
+
+    for label in range(119):
+        # Extract the arrays for this label
+        start_idx = label * arrays_per_label
+        end_idx = start_idx + arrays_per_label
+        label_arrays = target_sort_data[start_idx:end_idx]
+
+        # Shuffle the arrays for this label
+        random.shuffle(label_arrays)
+
+        # Split into two halves
+        half = len(label_arrays) // 2
+        list1 += label_arrays[:half]
+        list2 += label_arrays[half:]
+    half1_concat_data = np.concatenate(list1, axis=1)
+    half2_concat_data = np.concatenate(list2, axis=1)
+
     cca = CCA(n_components=ref_concat_data.shape[0])
     cca.fit(ref_concat_data.T, target_concat_data.T)
     trans_data = target_concat_data.T.dot(cca.y_rotations_).dot(np.linalg.inv(cca.x_rotations_)).T # find transformed data matrix B that is most correlated to ref data matrix A
     pca_comp_corr = []
+    split_half_corr = []
     for i in range(target_concat_data.shape[0]):
         pca_comp_corr.append(np.corrcoef(ref_concat_data[i,:], trans_data[i,:])[0,1])
+        split_half_corr.append(np.corrcoef(half1_concat_data[i,:], half2_concat_data[i,:])[0,1])
     
 
     trans_data_list = [trans_data[:,i*num_tmstps:i*num_tmstps+num_tmstps] for i in range(num_trials)]
@@ -201,7 +228,7 @@ def cca_align(ref_data, ref_labels, target_data, target_labels):
     trans_data_list = [trans_data_list[i] for i in reverse_sort_idx]
     reverse_sort_labels = [target_sort_labels[i] for i in reverse_sort_idx]
 
-    return trans_data_list, reverse_sort_labels, np.mean(pca_comp_corr)
+    return trans_data_list, reverse_sort_labels, np.mean(pca_comp_corr), np.mean(split_half_corr)
 
 def prep_dataset(boc, exps, mapping_dict=None, pre=15, post=7, data_type='pca', pca_comp = None, cca=False, behavior=False):
     """
@@ -236,6 +263,7 @@ def prep_dataset(boc, exps, mapping_dict=None, pre=15, post=7, data_type='pca', 
             numCell.append(len(cids))
         ref_exp = exps[np.argmax(numCell)]
         dff = get_fluo(boc, exp)
+        dff = stats.zscore(dff, axis=1)
         pca_dff, ref_explained_var = pca_and_pad(dff, num_comp=pca_comp)
         print(f'ref data explained variance: {ref_explained_var:.2f}')
         stim_df = get_stim_df(boc, ref_exp, stimulus_name='natural_scenes')
@@ -263,9 +291,9 @@ def prep_dataset(boc, exps, mapping_dict=None, pre=15, post=7, data_type='pca', 
             data, labels = extract_data_by_images(dff, stim_df, mapping_dict=mapping_dict, pre=pre, post=post)
         
         if cca:
-            data, labels, adj_corr = cca_align(ref_data, ref_labels, data, labels)
+            data, labels, adj_corr, split_corr = cca_align(ref_data, ref_labels, data, labels)
             print(f'exp#{exp_count} aligned corr: {adj_corr: .2f}')
-
+            print(f'exp#{exp_count} split half corr: {split_corr: .2f}')
         
         data = [torch.from_numpy(datum).float() for datum in data]
         labels = torch.LongTensor(labels)
@@ -315,6 +343,124 @@ def get_mapping_dict(seq):
     dict1 = {i-1: val for i, val in enumerate(seq, start=1)}
     dict1.update({-1:max(seq)+1})
     return dict1, len(set(dict1.values()))
+
+
+#####################EXPERIMENT###########################
+def index_by_combinations(df):
+    # Initialize the dictionary with all possible combinations
+    max_ori_sg = 5
+    max_sf_sg = 4
+    max_phase_sg = 3
+    combinations = itertools.product(range(0, max_ori_sg + 1), range(1, max_sf_sg + 2), range(0, max_phase_sg + 1))
+    indexes_dict = {combination: [] for combination in combinations}
+    # print(indexes_dict)
+    # Iterate through each row
+    for index, row in df.iterrows():
+        # Check if osi_sg is within the specified range
+        if 0.5 < row['osi_sg'] <= 1.5:
+            # Create a tuple of the combination
+            combination = (row['ori_sg'], row['sf_sg'], row['phase_sg'])
+
+            # Append the index to the corresponding list
+            indexes_dict.get(combination, []).append(index)
+
+    return indexes_dict
+
+def average_rows_by_index_dict(X, index_dict):
+    # Initialize an output array with the same number of columns as X and rows equal to the length of index_dict
+    output_array = np.zeros((len(index_dict), X.shape[1]))
+
+    for i, (key, indexes) in enumerate(index_dict.items()):
+        if indexes:  # Check if the list of indexes is not empty
+            selected_rows = X[indexes]
+            output_array[i] = np.mean(selected_rows, axis=0)
+        # If the list of indexes is empty, the row remains zeros as initialized
+
+    return output_array
+
+def prep_dataset_by_static_grating(boc, exps, mapping_dict=None, pre=15, post=7, behavior=False):
+    """
+    preparing dataset for training. here, output is organized by response specificity to static gratings (orix6, spatial freqx5, phasex4)
+    each row is average of neural traces of neurons that belong to a specific combination of (ori, sf, phase)
+
+    Parameters:
+    - boc: BrainObservatoryCache object
+    - exps: list of experiment objects, returned from get_exps()
+    - pre: how many timesteps before image presentation should be extracted
+    - post: how many timesteps after image presentation should be extracted
+    Returns:
+    - out: dict containing 3 keys: model_input, model_labels, metadata, each with the same length containing all datapoints (trials)
+    - metadata contains ['targeted_structures', 'experiment_container_id', 'indicator', 'cre_line', 'session_type', 'specimen_name'], indexed same as input and labels
+    - each model_input is 120 x pre+8+post (120 combinations of sg response x timesteps) in float32 tensor
+    - each model_label corresponds to the image presented to the mouse at the trial with same index as model_input, in LongTensor
+    """
+    model_input, model_labels, metadata = [], [], []
+    if behavior:
+        running_speed_out, pupil_size_out = [], []
+    meta_required = ['targeted_structures', 
+                     'experiment_container_id', 
+                     'indicator', 
+                     'cre_line', 
+                     'session_type', 
+                     'specimen_name']
+    
+    exp_count = 0
+    for exp in exps:
+        meta = boc.get_ophys_experiment_data(exp['id']).get_metadata()
+
+        try:
+            dff = get_fluo(boc, exp)
+            dff = stats.zscore(dff, axis=1)
+        except:
+            print(f"dFF extraction from experiment id{meta['experiment_container_id']} failed!")
+            continue
+        try:
+            stim_df = get_stim_df(boc, exp, stimulus_name='natural_scenes')
+        except:
+            print(f"stim table from experiment id{meta['experiment_container_id']} failed!")
+            continue
+        try:
+            sg = StaticGratings(boc.get_ophys_experiment_data(exp['id']))
+            sg_peak = sg.peak
+        except:
+            print(f"static gratings from experiment id{meta['experiment_container_id']} failed!")
+            continue
+        indexes_dict = index_by_combinations(sg_peak)
+        output = average_rows_by_index_dict(dff, indexes_dict)
+        data, labels = extract_data_by_images(output, stim_df, mapping_dict=mapping_dict, pre=pre, post=post)
+        data = [torch.from_numpy(datum).float() for datum in data]
+        labels = torch.LongTensor(labels)
+        model_input.extend(data)
+        model_labels.extend(labels)
+        meta = {k:v for k, v in meta.items() if k in meta_required}
+        meta_list = [meta.copy() for _ in range(len(labels))] # repeat metadata for each datum (natural scene trials) in the exp
+        metadata.extend(meta_list)
+        if behavior:
+            run, _ = boc.get_ophys_experiment_data(exp['id']).get_running_speed()
+            run[np.isnan(run)]=0
+            run = stats.zscore(run)
+            run = run.reshape(1,-1) # 1 x timepoints
+            run_data, _ = extract_data_by_images(run, stim_df, mapping_dict, pre, post)
+            _, pupil_size = boc.get_ophys_experiment_data(exp['id']).get_pupil_size()
+            pupil_size[np.isnan(pupil_size)]=0
+            pupil_size = stats.zscore(pupil_size)
+            pupil_size = pupil_size.reshape(1,-1)
+            pupil_size_data, _ = extract_data_by_images(pupil_size, stim_df, mapping_dict, pre, post)
+            run_data = [torch.from_numpy(datum).float() for datum in run_data]
+            pupil_size_data = [torch.from_numpy(datum).float() for datum in pupil_size_data]
+            running_speed_out.extend(run_data)
+            pupil_size_out.extend(pupil_size_data)
+            
+        exp_count+=1
+    
+    out = {'model_input':model_input,
+           'model_labels':model_labels,
+           'metadata':metadata}
+    if behavior:
+        out.update({'running_speed':running_speed_out,
+                    'pupil_size':pupil_size_out})
+    
+    return out
 
 
 

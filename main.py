@@ -19,7 +19,7 @@ if __name__ == '__main__':
     output_dir = '.'
     boc =  BrainObservatoryCache(
     manifest_file=str(Path(output_dir) / 'brain_observatory_manifest.json'))
-    set_seed(1)
+    set_seed(2)
     cre_lines_to_use = [
         'Cux2-CreERT2',
         'Emx1-IRES-Cre',
@@ -62,7 +62,7 @@ if __name__ == '__main__':
     #####################################################
     
     # Optional: Filter experiments if needed
-    # exps = filter_exps(boc, exps, num_exps = 1, min_neuron = pca_comp, max_neuron = 1000, behavior = True)
+    #exps = filter_exps(boc, exps, num_exps = 3, min_neuron = 100, max_neuron = 1000, behavior = False)
     
     # Optional: Try CCA Matching
     # cca_ind = True
@@ -75,7 +75,7 @@ if __name__ == '__main__':
     # then once we fit a model on the experiments in the training, we evaluate on 
     # the unseen experiments in the test data. Will be used to test whether our model is generalizable
     # to unseen population in the world or not
-    exp_type = 'unseen'
+    exp_type = 'single'
     num_exps = 10
     
     ######## DO NOT CHANGE THIS ########
@@ -83,21 +83,25 @@ if __name__ == '__main__':
     ####################################
     
     #TODO: Sixth item to experiment with, train vs. test split ratio
-    train_prop = 0.8
+    train_prop = 0.9
     
     #TODO: Seventh item to experiment with, pad the sequence or not
     pad_ind = False
     
     #TODO: Eighth item to experiment with, max_features
     max_features = 400
+
+    
         
     if exp_type == 'single':
         exps = exps[exp_chosen:exp_chosen+1]
-        dataset = prep_dataset(boc, exps, mapping_dict=mapping_dict, pre=pre, post=post, data_type=data_type, pca_comp=pca_comp, cca=cca_ind, behavior=behavior)
+        dataset= prep_dataset(boc, exps, mapping_dict=mapping_dict, pre=pre, post=post, data_type=data_type, pca_comp=pca_comp, cca=cca_ind, behavior=behavior)
+        #dataset = prep_dataset_by_static_grating(boc, exps, mapping_dict=mapping_dict, pre=pre, post=pre, behavior=False)
         train_dataset, test_dataset, train_orig_num_feat, test_orig_num_feat = get_train_test_split(dataset, train_prop = train_prop, pad = pad_ind, max_features=max_features)
     elif exp_type == 'multi':
-        exps = exps[exp_chosen:exp_chosen+num_exps]
+        #exps = exps[exp_chosen:exp_chosen+num_exps]
         dataset = prep_dataset(boc, exps, mapping_dict=mapping_dict, pre=pre, post=post, data_type=data_type, pca_comp=pca_comp, cca=cca_ind, behavior=behavior)
+        #dataset = prep_dataset_by_static_grating(boc, exps, mapping_dict=mapping_dict, pre=pre, post=pre, behavior=False)
         train_dataset, test_dataset, train_orig_num_feat, test_orig_num_feat = get_train_test_split(dataset, train_prop = train_prop, pad = pad_ind, max_features=max_features)
     else:
         train_exps, test_exps = split_by_exps(exps, train_prop = train_prop)
@@ -113,9 +117,11 @@ if __name__ == '__main__':
         test_dataset = sample_data(test_dataset, 0.01)
         
     if data_type == 'dff':
-        input_dim = train_dataset['model_input'][0].shape[0]
-    else:
+        input_dim = dataset['model_input'][0].shape[0]
+    elif data_type == 'pca':
         input_dim = pca_comp
+    else:
+        input_dim = 120
     
     if behavior:
         input_dim+=2 # added features are running_speed and pupil_size
@@ -139,7 +145,7 @@ if __name__ == '__main__':
     num_layers = 2
     dropout_prob = 0.5
     model_type = 'GRU'
-    label_smoothing = 0.2
+    label_smoothing = 0.5
     initial_lr = 0.001
     warmup_epochs = 3
     weight_decay = 1e-4
@@ -153,17 +159,17 @@ if __name__ == '__main__':
     # model = TransformerClassifier(input_dim=input_dim, hidden_dim=512, nlayers=1, nhead=8, num_classes=num_classes, dropout=0.5)
     
     model = model.to(device)
-    criterion = nn.CrossEntropyLoss(label_smoothing=label_smoothing)
+    criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=weight_decay)
     scheduler = WarmupWithScheduledDropLR(optimizer, warmup_epochs=warmup_epochs, initial_lr=initial_lr, drop_epochs=[30, 70])
    
     model, train_loss, train_error, train_top5_error, val_loss, val_error, val_top5_error = trainRNN(model, criterion, optimizer, scheduler, epochs, batch_size, clip, train_dataset, test_dataset, dry_run=False)
-    #model, train_loss, train_error, train_top5_error, val_loss, val_error, val_top5_error = trainTransformerClassifier(model, criterion, optimizer, scheduler, epochs, batch_size, train_dataset, test_dataset, dry_run=False)
+    # model, train_loss, train_error, train_top5_error, val_loss, val_error, val_top5_error = trainTransformerClassifier(model, criterion, optimizer, scheduler, epochs, batch_size, train_dataset, test_dataset, dry_run=False)
     
     #Deep set 
     # max_neuron = 400
-    # train_dataset, test_dataset, train_orig_num_feat, test_orig_num_feat = get_train_test_split(dataset, train_prop = 0.9, split_method = 'trial', pad = True, max_features=max_neuron)
-    # model = DeepSetRNNClassifier(num_timesteps=pre+8+post, hidden_dim=32, rnn_hidden_dim=256, num_classes=num_classes, num_linear_layers=3, num_rnn_layers=2, rnn_type='LSTM', dropout_prob=0.5)
+    # train_dataset, test_dataset, train_orig_num_feat, test_orig_num_feat = get_train_test_split(dataset, train_prop = 0.9, pad = True, max_features=max_neuron)
+    # model = DeepSetRNNClassifier(input_dim=max_neuron, hidden_dim=32, rnn_hidden_dim=256, num_classes=num_classes, num_linear_layers=3, num_rnn_layers=2, rnn_type='LSTM', dropout_prob=0.5)
     # model = model.to(device)
     # criterion = nn.CrossEntropyLoss()
     # optimizer = torch.optim.Adam(model.parameters(), lr=0.001, weight_decay=1e-4)
@@ -171,7 +177,7 @@ if __name__ == '__main__':
     # epochs = 100
     # batch_size = 256
     # clip = 1
-    # model, train_loss, train_error, val_error, val_loss = trainDeepSetRNNClassifier(model, criterion, optimizer, scheduler, epochs, batch_size, clip, train_dataset, test_dataset, train_orig_num_feat, test_orig_num_feat, dry_run = True)
+    # model, train_loss, train_error, val_error, val_loss = trainDeepSetRNNClassifier(model, criterion, optimizer, scheduler, epochs, batch_size, clip, train_dataset, test_dataset, train_orig_num_feat, test_orig_num_feat, dry_run = False)
     
     
     # fig, axes = plot_loss_and_error(train_loss, train_error, val_loss, val_error)
